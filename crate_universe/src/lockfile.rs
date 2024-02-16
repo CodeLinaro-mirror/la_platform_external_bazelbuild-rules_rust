@@ -189,6 +189,7 @@ impl PartialEq<String> for Digest {
 mod test {
     use crate::config::{CrateAnnotations, CrateId};
     use crate::splicing::cargo_config::{AdditionalRegistry, CargoConfig, Registry};
+    use crate::utils::target_triple::TargetTriple;
 
     use super::*;
 
@@ -210,8 +211,8 @@ mod test {
         );
 
         assert_eq!(
+            Digest("83ad667352ca5a7cb3cc60f171a65f3bf264c7c97c6d91113d4798ca1dfb8d48".to_owned()),
             digest,
-            Digest("fcca6635448d70091bffb6409f5edb153a46fcf7e889e39a33a9b9ff6e345ca0".to_owned())
         );
     }
 
@@ -230,15 +231,15 @@ mod test {
             )]),
             cargo_config: None,
             supported_platform_triples: BTreeSet::from([
-                "aarch64-apple-darwin".to_owned(),
-                "aarch64-unknown-linux-gnu".to_owned(),
-                "aarch64-pc-windows-msvc".to_owned(),
-                "wasm32-unknown-unknown".to_owned(),
-                "wasm32-wasi".to_owned(),
-                "x86_64-apple-darwin".to_owned(),
-                "x86_64-pc-windows-msvc".to_owned(),
-                "x86_64-unknown-freebsd".to_owned(),
-                "x86_64-unknown-linux-gnu".to_owned(),
+                TargetTriple::from_bazel("aarch64-apple-darwin".to_owned()),
+                TargetTriple::from_bazel("aarch64-unknown-linux-gnu".to_owned()),
+                TargetTriple::from_bazel("aarch64-pc-windows-msvc".to_owned()),
+                TargetTriple::from_bazel("wasm32-unknown-unknown".to_owned()),
+                TargetTriple::from_bazel("wasm32-wasi".to_owned()),
+                TargetTriple::from_bazel("x86_64-apple-darwin".to_owned()),
+                TargetTriple::from_bazel("x86_64-pc-windows-msvc".to_owned()),
+                TargetTriple::from_bazel("x86_64-unknown-freebsd".to_owned()),
+                TargetTriple::from_bazel("x86_64-unknown-linux-gnu".to_owned()),
             ]),
             ..Config::default()
         };
@@ -255,8 +256,8 @@ mod test {
         );
 
         assert_eq!(
+            Digest("40a5ede6a47639166062fffab74e5dbe229b1d2508bcf70d8dfeba04b4f4ac9a".to_owned()),
             digest,
-            Digest("1a578e7b710c75d269335fe39440e2b5a013dee85e02dc7e7aabafe1d0a3525e".to_owned())
         );
     }
 
@@ -286,8 +287,8 @@ mod test {
         );
 
         assert_eq!(
+            Digest("10a1921f3122042d6c513392992e4b3982d0ed8985fdc2dee965c466f8cb00a4".to_owned()),
             digest,
-            Digest("e199dd859bd5b75d6b152f364f8cc6ad6c3a2a68ae777dfb8b250c2d90e35f28".to_owned())
         );
     }
 
@@ -335,8 +336,8 @@ mod test {
         );
 
         assert_eq!(
+            Digest("9e3d58a48b375bec2cf8c783d92f5d8db67306046e652ee376f30c362c882f56".to_owned()),
             digest,
-            Digest("0222be160f1031346cc209a8732c678bf32acb08f891fdfa0e9965d0ad22a33a".to_owned())
         );
     }
 }
