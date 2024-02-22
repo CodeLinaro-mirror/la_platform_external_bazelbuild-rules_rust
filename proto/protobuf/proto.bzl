@@ -225,7 +225,6 @@ def _rust_proto_compile(protos, descriptor_sets, imports, crate_name, ctx, is_gr
             metadata = rust_metadata,
             edition = proto_toolchain.edition,
             rustc_env = {},
-            _rustc_env_attr = {},
             is_test = False,
             compile_data = depset([target.files for target in getattr(ctx.attr, "compile_data", [])]),
             compile_data_targets = depset(getattr(ctx.attr, "compile_data", [])),
@@ -326,15 +325,11 @@ rust_proto_library = rule(
         ),
     },
     fragments = ["cpp"],
-    host_fragments = ["cpp"],
     toolchains = [
         str(Label("//proto/protobuf:toolchain_type")),
         str(Label("//rust:toolchain_type")),
         "@bazel_tools//tools/cpp:toolchain_type",
     ],
-    # TODO: Remove once (bazelbuild/bazel#11584) is closed and the rules use
-    # the version of Bazel that issue was closed on as the min supported version
-    incompatible_use_toolchain_transition = True,
     doc = """\
 Builds a Rust library crate from a set of `proto_library`s.
 
@@ -422,15 +417,11 @@ rust_grpc_library = rule(
         ),
     },
     fragments = ["cpp"],
-    host_fragments = ["cpp"],
     toolchains = [
         str(Label("//proto/protobuf:toolchain_type")),
         str(Label("//rust:toolchain_type")),
         "@bazel_tools//tools/cpp:toolchain_type",
     ],
-    # TODO: Remove once (bazelbuild/bazel#11584) is closed and the rules use
-    # the version of Bazel that issue was closed on as the min supported version
-    incompatible_use_toolchain_transition = True,
     doc = """\
 Builds a Rust library crate from a set of `proto_library`s suitable for gRPC.
 
