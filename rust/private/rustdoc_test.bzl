@@ -122,7 +122,6 @@ def _rust_doc_test_impl(ctx):
         output = crate.output,
         edition = crate.edition,
         rustc_env = crate.rustc_env,
-        _rustc_env_attr = crate._rustc_env_attr,
         rustc_env_files = crate.rustc_env_files,
         is_test = True,
         compile_data = crate.compile_data,
@@ -231,12 +230,10 @@ rust_doc_test = rule(
     },
     test = True,
     fragments = ["cpp"],
-    host_fragments = ["cpp"],
     toolchains = [
         str(Label("//rust:toolchain_type")),
         "@bazel_tools//tools/cpp:toolchain_type",
     ],
-    incompatible_use_toolchain_transition = True,
     doc = dedent("""\
         Runs Rust documentation tests.
 
