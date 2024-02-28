@@ -146,13 +146,11 @@ generated source files are also ignored by this aspect.
             default = Label("//util/process_wrapper"),
         ),
     },
-    incompatible_use_toolchain_transition = True,
     required_providers = [
         [rust_common.crate_info],
         [rust_common.test_crate_info],
     ],
     fragments = ["cpp"],
-    host_fragments = ["cpp"],
     toolchains = [
         str(Label("//rust/rustfmt:toolchain_type")),
     ],
@@ -188,9 +186,7 @@ Output Groups:
 
 - `rustfmt_manifest`: A manifest used by rustfmt binaries to provide crate specific settings.
 """,
-    incompatible_use_toolchain_transition = True,
     fragments = ["cpp"],
-    host_fragments = ["cpp"],
     toolchains = [
         str(Label("//rust/rustfmt:toolchain_type")),
     ],
@@ -299,7 +295,6 @@ def _rustfmt_toolchain_impl(ctx):
 rustfmt_toolchain = rule(
     doc = "A toolchain for [rustfmt](https://rust-lang.github.io/rustfmt/)",
     implementation = _rustfmt_toolchain_impl,
-    incompatible_use_toolchain_transition = True,
     attrs = {
         "rustc": attr.label(
             doc = "The location of the `rustc` binary. Can be a direct source or a filegroup containing one item.",
@@ -342,5 +337,4 @@ current_rustfmt_toolchain = rule(
     toolchains = [
         str(Label("@rules_rust//rust/rustfmt:toolchain_type")),
     ],
-    incompatible_use_toolchain_transition = True,
 )
