@@ -300,11 +300,10 @@ def _rust_test_impl(ctx):
     deps = transform_deps(ctx.attr.deps)
     proc_macro_deps = transform_deps(ctx.attr.proc_macro_deps + get_import_macro_deps(ctx))
 
-    if toolchain._incompatible_test_attr_crate_and_srcs_mutually_exclusive:
-        if ctx.attr.crate and ctx.attr.srcs:
-            fail("rust_test.crate and rust_test.srcs are mutually exclusive. Update {} to use only one of these attributes".format(
-                ctx.label,
-            ))
+    if ctx.attr.crate and ctx.attr.srcs:
+        fail("rust_test.crate and rust_test.srcs are mutually exclusive. Update {} to use only one of these attributes".format(
+            ctx.label,
+        ))
 
     if ctx.attr.crate:
         # Target is building the crate in `test` config
@@ -528,10 +527,6 @@ RUSTC_ATTRS = {
     "_extra_rustc_flags": attr.label(
         default = Label("//:extra_rustc_flags"),
     ),
-    "_import_macro_dep": attr.label(
-        default = Label("//util/import"),
-        cfg = "exec",
-    ),
     "_is_proc_macro_dep": attr.label(
         default = Label("//rust/private:is_proc_macro_dep"),
     ),
@@ -560,6 +555,15 @@ _common_attrs = {
 
             These are other `rust_library` targets and will be presented as the new name given.
         """),
+    ),
+    "alwayslink": attr.bool(
+        doc = dedent("""\
+            If 1, any binary that depends (directly or indirectly) on this library
+            will link in all the object files even if some contain no symbols referenced by the binary.
+
+            This attribute is used by the C++ Starlark API when passing CcInfo providers.
+        """),
+        default = False,
     ),
     "compile_data": attr.label_list(
         doc = dedent("""\
@@ -683,6 +687,10 @@ _common_attrs = {
             is the root of the crate to be passed to rustc to build this crate.
         """),
         allow_files = [".rs"],
+        # Allow use of --compile_one_dependency with rust targets. Support for this feature for
+        # non-builtin rulesets is undocumented outside of the bazel source:
+        # https://github.com/bazelbuild/bazel/blob/7.1.1/src/main/java/com/google/devtools/build/lib/packages/Attribute.java#L102
+        flags = ["DIRECT_COMPILE_TIME_INPUT"],
     ),
     "stamp": _stamp_attribute(
         default_value = 0,
@@ -1394,7 +1402,7 @@ rust_test = rule(
 """),
 )
 
-def rust_test_suite(name, srcs, **kwargs):
+def rust_test_suite(name, srcs, shared_srcs = [], **kwargs):
     """A rule for creating a test suite for a set of `rust_test` targets.
 
     This rule can be used for setting up typical rust [integration tests][it]. Given the following
@@ -1412,6 +1420,8 @@ def rust_test_suite(name, srcs, **kwargs):
             integrated_test_c.rs
             patterns/
                 fibonacci_test.rs
+            helpers/
+                mod.rs
     ```
 
     The rule can be used to generate [rust_test](#rust_test) targets for each source file under `tests`
@@ -1433,6 +1443,7 @@ def rust_test_suite(name, srcs, **kwargs):
     rust_test_suite(
         name = "integrated_tests_suite",
         srcs = glob(["tests/**"]),
+        shared_srcs=glob(["tests/helpers/**"]),
         deps = [":math_lib"],
     )
     ```
@@ -1443,6 +1454,7 @@ def rust_test_suite(name, srcs, **kwargs):
     Args:
         name (str): The name of the `test_suite`.
         srcs (list): All test sources, typically `glob(["tests/**/*.rs"])`.
+        shared_srcs (list): Optional argument for sources shared among tests, typically helper functions.
         **kwargs (dict): Additional keyword arguments for the underyling [rust_test](#rust_test) targets. The
             `tags` argument is also passed to the generated `test_suite` target.
     """
@@ -1452,12 +1464,16 @@ def rust_test_suite(name, srcs, **kwargs):
         if not src.endswith(".rs"):
             fail("srcs should have `.rs` extensions")
 
+        if src in shared_srcs:
+            continue
+
         # Prefixed with `name` to allow parameterization with macros
         # The test name should not end with `.rs`
         test_name = name + "_" + src[:-3]
         rust_test(
             name = test_name,
-            srcs = [src],
+            crate_root = src,
+            srcs = [src] + shared_srcs,
             **kwargs
         )
         tests.append(test_name)
