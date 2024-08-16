@@ -1,5 +1,5 @@
 {
-  "checksum": "29b3baa67c12dc0f5ff62bd02183029b2bb2b9894ee84774c77871de8c0023e1",
+  "checksum": "5e194a065cd230e3e8e9ab03a16b2a1afd20fd8842fa5a28ab62ab96c96b2921",
   "crates": {
     "direct-cargo-bazel-deps 0.0.1": {
       "name": "direct-cargo-bazel-deps",
@@ -12,7 +12,7 @@
             "crate_name": "direct_cargo_bazel_deps",
             "crate_root": ".direct_cargo_bazel_deps.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -47,7 +47,7 @@
       "package_url": "https://github.com/bazelbuild/rules_rust",
       "repository": {
         "Http": {
-          "url": "https://crates.io/api/v1/crates/test_data_passing_crate/0.1.0/download",
+          "url": "https://static.crates.io/crates/test_data_passing_crate/0.1.0/download",
           "sha256": "08c67aba3a29c3dc187eaf8080107404abfaee1ae893a02c43a362343ca73286"
         }
       },
@@ -57,7 +57,7 @@
             "crate_name": "test_data_passing_crate",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -69,7 +69,7 @@
             "crate_name": "build_script_build",
             "crate_root": "build.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
