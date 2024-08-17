@@ -15,7 +15,7 @@ rust_library(
     name = "winapi",
     srcs = glob(
         include = ["**/*.rs"],
-        allow_empty = False,
+        allow_empty = True,
     ),
     compile_data = glob(
         include = ["**"],
@@ -57,6 +57,7 @@ rust_library(
         "@rules_rust//rust/platform:aarch64-apple-darwin": [],
         "@rules_rust//rust/platform:aarch64-pc-windows-msvc": [],
         "@rules_rust//rust/platform:aarch64-unknown-linux-gnu": [],
+        "@rules_rust//rust/platform:aarch64-unknown-nixos-gnu": [],
         "@rules_rust//rust/platform:arm-unknown-linux-gnueabi": [],
         "@rules_rust//rust/platform:armv7-linux-androideabi": [],
         "@rules_rust//rust/platform:armv7-unknown-linux-gnueabi": [],
@@ -70,6 +71,7 @@ rust_library(
         "@rules_rust//rust/platform:x86_64-pc-windows-msvc": [],
         "@rules_rust//rust/platform:x86_64-unknown-freebsd": [],
         "@rules_rust//rust/platform:x86_64-unknown-linux-gnu": [],
+        "@rules_rust//rust/platform:x86_64-unknown-nixos-gnu": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     version = "0.3.9",
@@ -79,10 +81,10 @@ rust_library(
 )
 
 cargo_build_script(
-    name = "winapi_bs",
+    name = "_bs",
     srcs = glob(
         include = ["**/*.rs"],
-        allow_empty = False,
+        allow_empty = True,
     ),
     crate_features = [
         "consoleapi",
@@ -111,6 +113,7 @@ cargo_build_script(
         ],
     ),
     edition = "2015",
+    pkg_name = "winapi",
     rustc_flags = [
         "--cap-lints=allow",
     ],
@@ -127,6 +130,6 @@ cargo_build_script(
 
 alias(
     name = "build_script_build",
-    actual = ":winapi_bs",
+    actual = ":_bs",
     tags = ["manual"],
 )
