@@ -40,6 +40,12 @@ load(
 )
 load(":utils.bzl", "is_std_dylib")
 
+# This feature is disabled unless one of the dependencies is a cc_library.
+# Authors of C++ toolchains can place linker flags that should only be applied
+# when linking with C objects in a feature with this name, or require this
+# feature from other features which needs to be disabled together.
+RUST_LINK_CC_FEATURE = "rules_rust_link_cc"
+
 BuildInfo = _BuildInfo
 
 AliasableDepInfo = provider(
@@ -195,21 +201,19 @@ def _is_proc_macro(crate_info):
 def collect_deps(
         deps,
         proc_macro_deps,
-        aliases,
-        are_linkstamps_supported = False):
+        aliases):
     """Walks through dependencies and collects the transitive dependencies.
 
     Args:
         deps (list): The deps from ctx.attr.deps.
         proc_macro_deps (list): The proc_macro deps from ctx.attr.proc_macro_deps.
         aliases (dict): A dict mapping aliased targets to their actual Crate information.
-        are_linkstamps_supported (bool): Whether the current rule and the toolchain support building linkstamps..
 
     Returns:
         tuple: Returns a tuple of:
             DepInfo,
             BuildInfo,
-            linkstamps (depset[CcLinkstamp]): A depset of CcLinkstamps that need to be compiled and linked into all linked binaries.
+            linkstamps (depset[CcLinkstamp]): A depset of CcLinkstamps that need to be compiled and linked into all linked binaries when applicable.
 
     """
     direct_crates = []
@@ -240,6 +244,7 @@ def collect_deps(
                 crate_deps.append(struct(
                     crate_info = dep_variant_info.crate_info,
                     dep_info = dep_variant_info.dep_info,
+                    cc_info = dep_variant_info.cc_info,
                 ))
 
     aliases = {k.label: v for k, v in aliases.items()}
@@ -248,7 +253,7 @@ def collect_deps(
         cc_info = _get_cc_info(dep)
         dep_build_info = _get_build_info(dep)
 
-        if cc_info and are_linkstamps_supported:
+        if cc_info:
             linkstamps.append(cc_info.linking_context.linkstamps())
 
         if crate_info:
@@ -959,6 +964,7 @@ def construct_arguments(
     compilation_mode = get_compilation_mode_opts(ctx, toolchain)
     rustc_flags.add(compilation_mode.opt_level, format = "--codegen=opt-level=%s")
     rustc_flags.add(compilation_mode.debug_info, format = "--codegen=debuginfo=%s")
+    rustc_flags.add(compilation_mode.strip_level, format = "--codegen=strip=%s")
 
     # For determinism to help with build distribution and such
     if remap_path_prefix != None:
@@ -1070,6 +1076,9 @@ def construct_arguments(
     if toolchain._rename_first_party_crates:
         env["RULES_RUST_THIRD_PARTY_DIR"] = toolchain._third_party_dir
 
+    if crate_info.type in toolchain.extra_rustc_flags_for_crate_types.keys():
+        rustc_flags.add_all(toolchain.extra_rustc_flags_for_crate_types[crate_info.type])
+
     if is_exec_configuration(ctx):
         rustc_flags.add_all(toolchain.extra_exec_rustc_flags)
     else:
@@ -1094,6 +1103,9 @@ def construct_arguments(
 
     if _is_no_std(ctx, toolchain, crate_info):
         rustc_flags.add('--cfg=feature="no_std"')
+
+    # Needed for bzlmod-aware runfiles resolution.
+    env["REPOSITORY_NAME"] = ctx.label.workspace_name
 
     # Create a struct which keeps the arguments separate so each may be tuned or
     # replaced where necessary
@@ -1142,8 +1154,6 @@ def rustc_compile_action(
     rustc_output = crate_info_dict.get("rustc_output", None)
     rustc_rmeta_output = crate_info_dict.get("rustc_rmeta_output", None)
 
-    cc_toolchain, feature_configuration = find_cc_toolchain(ctx)
-
     # Determine whether to use cc_common.link:
     #  * either if experimental_use_cc_common_link is 1,
     #  * or if experimental_use_cc_common_link is -1 and
@@ -1161,11 +1171,17 @@ def rustc_compile_action(
         deps = crate_info_dict["deps"],
         proc_macro_deps = crate_info_dict["proc_macro_deps"],
         aliases = crate_info_dict["aliases"],
-        are_linkstamps_supported = _are_linkstamps_supported(
-            feature_configuration = feature_configuration,
-            has_grep_includes = hasattr(ctx.attr, "_use_grep_includes"),
-        ),
     )
+    extra_disabled_features = [RUST_LINK_CC_FEATURE]
+    if crate_info.type in ["bin", "cdylib"] and dep_info.transitive_noncrates.to_list():
+        # One or more of the transitive deps is a cc_library / cc_import
+        extra_disabled_features = []
+    cc_toolchain, feature_configuration = find_cc_toolchain(ctx, extra_disabled_features)
+    if not _are_linkstamps_supported(
+        feature_configuration = feature_configuration,
+        has_grep_includes = hasattr(ctx.attr, "_use_grep_includes"),
+    ):
+        linkstamps = depset([])
 
     # Determine if the build is currently running with --stamp
     stamp = is_stamping_enabled(attr)
@@ -1285,12 +1301,15 @@ def rustc_compile_action(
     if rustc_output:
         action_outputs.append(rustc_output)
 
+    # Get the compilation mode for the current target.
+    compilation_mode = get_compilation_mode_opts(ctx, toolchain)
+
     # Rustc generates a pdb file (on Windows) or a dsym folder (on macos) so provide it in an output group for crate
     # types that benefit from having debug information in a separate file.
     pdb_file = None
     dsym_folder = None
     if crate_info.type in ("cdylib", "bin"):
-        if toolchain.target_os == "windows":
+        if toolchain.target_os == "windows" and compilation_mode.strip_level == "none":
             pdb_file = ctx.actions.declare_file(crate_info.output.basename[:-len(crate_info.output.extension)] + "pdb", sibling = crate_info.output)
             action_outputs.append(pdb_file)
         elif toolchain.target_os == "darwin":
@@ -1381,13 +1400,18 @@ def rustc_compile_action(
 
         # The path to the package dir, including a trailing "/".
         package_dir = ctx.bin_dir.path + "/"
-        if ctx.label.workspace_root:
+
+        # For external repositories, workspace root is not part of the output
+        # path when sibling repository layout is used (the repository name is
+        # part of the bin_dir). This scenario happens when the workspace root
+        # starts with "../"
+        if ctx.label.workspace_root and not ctx.label.workspace_root.startswith("../"):
             package_dir = package_dir + ctx.label.workspace_root + "/"
         if ctx.label.package:
             package_dir = package_dir + ctx.label.package + "/"
 
         if not crate_info.output.path.startswith(package_dir):
-            fail("The package dir path {} should be a prefix of the crate_info.output.path {}", package_dir, crate_info.output.path)
+            fail("The package dir path", package_dir, "should be a prefix of the crate_info.output.path", crate_info.output.path)
 
         output_relative_to_package = crate_info.output.path[len(package_dir):]
 
@@ -1429,8 +1453,18 @@ def rustc_compile_action(
 
     experimental_use_coverage_metadata_files = toolchain._experimental_use_coverage_metadata_files
 
+    dynamic_libraries = [
+        library_to_link.dynamic_library
+        for dep in getattr(ctx.attr, "deps", [])
+        if CcInfo in dep
+        for linker_input in dep[CcInfo].linking_context.linker_inputs.to_list()
+        for library_to_link in linker_input.libraries
+        if _is_dylib(library_to_link)
+    ]
     runfiles = ctx.runfiles(
-        files = getattr(ctx.files, "data", []) + ([] if experimental_use_coverage_metadata_files else coverage_runfiles),
+        files = getattr(ctx.files, "data", []) +
+                ([] if experimental_use_coverage_metadata_files else coverage_runfiles) +
+                dynamic_libraries,
         collect_data = True,
     )
     if getattr(ctx.attr, "crate", None):
@@ -1585,12 +1619,13 @@ def establish_cc_info(ctx, attr, crate_info, toolchain, cc_toolchain, feature_co
             static_library = crate_info.output,
             # TODO(hlopko): handle PIC/NOPIC correctly
             pic_static_library = crate_info.output,
+            alwayslink = getattr(attr, "alwayslink", False),
         )
     elif crate_info.type in ("rlib", "lib"):
         # bazel hard-codes a check for endswith((".a", ".pic.a",
         # ".lib")) in create_library_to_link, so we work around that
         # by creating a symlink to the .rlib with a .a extension.
-        dot_a = make_static_lib_symlink(ctx.actions, crate_info.output)
+        dot_a = make_static_lib_symlink(ctx.label.package, ctx.actions, crate_info.output)
 
         # TODO(hlopko): handle PIC/NOPIC correctly
         library_to_link = cc_common.create_library_to_link(
@@ -1600,6 +1635,7 @@ def establish_cc_info(ctx, attr, crate_info, toolchain, cc_toolchain, feature_co
             static_library = dot_a,
             # TODO(hlopko): handle PIC/NOPIC correctly
             pic_static_library = dot_a,
+            alwayslink = getattr(attr, "alwayslink", False),
         )
     elif crate_info.type == "cdylib":
         library_to_link = cc_common.create_library_to_link(
