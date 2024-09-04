@@ -1,7 +1,6 @@
 //! Collect and store information from Cargo metadata specific to Bazel's needs
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::convert::TryFrom;
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
@@ -11,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{Commitish, Config, CrateAnnotations, CrateId};
 use crate::metadata::dependency::DependencySet;
-use crate::select::Select;
+use crate::metadata::TreeResolverMetadata;
 use crate::splicing::{SourceInfo, WorkspaceMetadata};
 
 pub(crate) type CargoMetadata = cargo_metadata::Metadata;
@@ -74,7 +73,11 @@ impl MetadataAnnotation {
             .map(|node| {
                 (
                     node.id.clone(),
-                    Self::annotate_crate(node.clone(), &metadata),
+                    Self::annotate_crate(
+                        node.clone(),
+                        &metadata,
+                        &workspace_metadata.tree_metadata,
+                    ),
                 )
             })
             .collect();
@@ -94,9 +97,13 @@ impl MetadataAnnotation {
         }
     }
 
-    fn annotate_crate(node: Node, metadata: &CargoMetadata) -> CrateAnnotation {
+    fn annotate_crate(
+        node: Node,
+        metadata: &CargoMetadata,
+        resolver_data: &TreeResolverMetadata,
+    ) -> CrateAnnotation {
         // Gather all dependencies
-        let deps = DependencySet::new_for_node(&node, metadata);
+        let deps = DependencySet::new_for_node(&node, metadata, resolver_data);
 
         CrateAnnotation { node, deps }
     }
@@ -273,10 +280,11 @@ impl LockfileAnnotation {
         // metadata the raw source info is used for registry crates and `crates.io` is
         // assumed to be the source.
         if source.is_registry() {
+            // source url
             return Ok(SourceAnnotation::Http {
                 url: format!(
-                    "https://crates.io/api/v1/crates/{}/{}/download",
-                    lock_pkg.name, lock_pkg.version,
+                    "https://static.crates.io/crates/{}/{}/download",
+                    lock_pkg.name, lock_pkg.version
                 ),
                 sha256: lock_pkg
                     .checksum
@@ -363,9 +371,6 @@ pub(crate) struct Annotations {
 
     /// Pairred crate annotations
     pub(crate) pairred_extras: BTreeMap<CrateId, PairedExtras>,
-
-    /// Feature set for each target triplet and crate.
-    pub(crate) crate_features: BTreeMap<CrateId, Select<BTreeSet<String>>>,
 }
 
 impl Annotations {
@@ -424,15 +429,12 @@ impl Annotations {
             );
         }
 
-        let crate_features = metadata_annotation.workspace_metadata.features.clone();
-
         // Annotate metadata
         Ok(Annotations {
             metadata: metadata_annotation,
             lockfile: lockfile_annotation,
             config,
             pairred_extras,
-            crate_features,
         })
     }
 }
@@ -472,8 +474,13 @@ fn cargo_meta_pkg_to_locked_pkg<'a>(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::config::CrateNameAndVersionReq;
 
+    use semver::Version;
+    use serde_json::json;
+
+    use crate::config::CrateNameAndVersionReq;
+    use crate::metadata::CargoTreeEntry;
+    use crate::select::Select;
     use crate::test::*;
 
     #[test]
@@ -519,9 +526,6 @@ mod test {
     }
 
     #[test]
-    fn annotate_metadata_with_no_deps() {}
-
-    #[test]
     fn annotate_lockfile_with_no_deps() {
         LockfileAnnotation::new(test::lockfile::no_deps(), &test::metadata::no_deps()).unwrap();
     }
@@ -534,7 +538,7 @@ mod test {
                 .crates;
         let tracing_core = crates
             .iter()
-            .find(|(k, _)| k.repr.starts_with("tracing-core "))
+            .find(|(k, _)| k.repr.contains("#tracing-core@"))
             .map(|(_, v)| v)
             .unwrap();
         match tracing_core {
@@ -557,7 +561,9 @@ mod test {
                 .unwrap()
                 .crates;
 
-        let package_id = PackageId { repr: "tracing 0.2.0 (git+https://github.com/tokio-rs/tracing.git?branch=master#1e09e50e8d15580b5929adbade9c782a6833e4a0)".into() };
+        let package_id = PackageId {
+            repr: "git+https://github.com/tokio-rs/tracing.git?branch=master#tracing@0.2.0".into(),
+        };
         let annotation = crates.get(&package_id).unwrap();
 
         let commitish = match annotation {
@@ -630,5 +636,59 @@ mod test {
             ..annotations
         };
         assert_eq!(*extras, expected);
+    }
+
+    #[test]
+    fn test_find_workspace_metadata() {
+        let mut metadata = metadata::common();
+        metadata.workspace_metadata = json!({
+            "cargo-bazel": {
+            "package_prefixes": {},
+            "sources": {},
+            "tree_metadata": {
+                "bitflags 1.3.2": {
+                    "common": {
+                        "features": [
+                            "default",
+                        ],
+                    },
+                    "selects": {
+                        "x86_64-unknown-linux-gnu": {
+                            "features": [
+                                "std",
+                            ],
+                            "deps": [
+                                "libc 1.2.3",
+                            ],
+                        },
+                    }
+                }
+            },
+        }
+        });
+
+        let mut select = Select::new();
+        select.insert(
+            CargoTreeEntry {
+                features: BTreeSet::from(["default".to_owned()]),
+                deps: BTreeSet::new(),
+            },
+            None,
+        );
+        select.insert(
+            CargoTreeEntry {
+                features: BTreeSet::from(["std".to_owned()]),
+                deps: BTreeSet::from([CrateId::new("libc".to_owned(), Version::new(1, 2, 3))]),
+            },
+            Some("x86_64-unknown-linux-gnu".to_owned()),
+        );
+        let expected = TreeResolverMetadata::from([(
+            CrateId::new("bitflags".to_owned(), Version::new(1, 3, 2)),
+            select,
+        )]);
+
+        let result = find_workspace_metadata(&metadata).unwrap();
+
+        assert_eq!(expected, result.tree_metadata);
     }
 }
