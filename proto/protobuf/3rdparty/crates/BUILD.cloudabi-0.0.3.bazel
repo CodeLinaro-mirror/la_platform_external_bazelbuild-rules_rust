@@ -14,7 +14,7 @@ rust_library(
     name = "cloudabi",
     srcs = glob(
         include = ["**/*.rs"],
-        allow_empty = False,
+        allow_empty = True,
     ),
     compile_data = glob(
         include = ["**"],
@@ -78,7 +78,4 @@ rust_library(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     version = "0.0.3",
-    deps = [
-        "@rules_rust_proto__bitflags-1.3.2//:bitflags",
-    ],
 )
