@@ -19,7 +19,7 @@ load("//rust/private:common.bzl", "DEFAULT_NIGHTLY_ISO_DATE")
 DEFAULT_TOOLCHAIN_NAME_PREFIX = "toolchain_for"
 DEFAULT_STATIC_RUST_URL_TEMPLATES = ["https://static.rust-lang.org/dist/{}.tar.xz"]
 DEFAULT_NIGHTLY_VERSION = "nightly/{}".format(DEFAULT_NIGHTLY_ISO_DATE)
-DEFAULT_EXTRA_TARGET_TRIPLES = ["wasm32-unknown-unknown", "wasm32-wasi"]
+DEFAULT_EXTRA_TARGET_TRIPLES = ["wasm32-unknown-unknown", "wasm32-wasip1"]
 
 TINYJSON_KWARGS = dict(
     name = "rules_rust_tinyjson",
@@ -46,6 +46,7 @@ filegroup(
             "lib/rustlib/{target_triple}/codegen-backends/*{dylib_ext}",
             "lib/rustlib/{target_triple}/bin/rust-lld{binary_ext}",
             "lib/rustlib/{target_triple}/lib/*{dylib_ext}*",
+            "lib/rustlib/{target_triple}/lib/*.rmeta",
         ],
         allow_empty = True,
     ),
@@ -96,6 +97,8 @@ def BUILD_for_cargo(target_triple):
     )
 
 _build_file_for_rustfmt_template = """\
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
 filegroup(
     name = "rustfmt_bin",
     srcs = ["bin/rustfmt{binary_ext}"],
@@ -266,6 +269,7 @@ rust_toolchain(
     extra_rustc_flags = {extra_rustc_flags},
     extra_exec_rustc_flags = {extra_exec_rustc_flags},
     opt_level = {opt_level},
+    tags = ["rust_version={version}"],
 )
 """
 
@@ -273,6 +277,7 @@ def BUILD_for_rust_toolchain(
         name,
         exec_triple,
         target_triple,
+        version,
         allocator_library,
         global_allocator_library,
         default_edition,
@@ -288,6 +293,7 @@ def BUILD_for_rust_toolchain(
         name (str): The name of the toolchain declaration
         exec_triple (triple): The rust-style target that this compiler runs on
         target_triple (triple): The rust-style target triple of the tool
+        version (str): The Rust version for the toolchain.
         allocator_library (str, optional): Target that provides allocator functions when rust_library targets are embedded in a cc_binary.
         global_allocator_library (str, optional): Target that provides allocator functions when a global allocator is used with cc_common_link.
                                                   This target is only used in the target configuration; exec builds still use the symbols provided
@@ -340,6 +346,7 @@ def BUILD_for_rust_toolchain(
         extra_rustc_flags = extra_rustc_flags,
         extra_exec_rustc_flags = extra_exec_rustc_flags,
         opt_level = opt_level,
+        version = version,
     )
 
 _build_file_for_toolchain_template = """\
@@ -574,12 +581,14 @@ def BUILD_for_rustfmt_toolchain(name, rustfmt, rustc, rustc_lib):
         rustc_lib = rustc_lib,
     )
 
-def load_rust_stdlib(ctx, target_triple):
+def load_rust_stdlib(ctx, target_triple, version, iso_date = None):
     """Loads a rust standard library and yields corresponding BUILD for it
 
     Args:
         ctx (repository_ctx): A repository_ctx.
         target_triple (struct): The rust-style target triple of the tool
+        version (str): The version of the tool among \"nightly\", \"beta\", or an exact version.
+        iso_date (str): The iso_date to use with \"nightly\" or \"beta\" versions.
 
     Returns:
         Tuple[str, Dict[str, str]]: The BUILD file contents for this stdlib and the sha256 of the artifact.
@@ -587,58 +596,62 @@ def load_rust_stdlib(ctx, target_triple):
 
     sha256 = load_arbitrary_tool(
         ctx,
-        iso_date = ctx.attr.iso_date,
+        iso_date = iso_date,
         target_triple = target_triple,
         tool_name = "rust-std",
         tool_subdirectories = ["rust-std-{}".format(target_triple.str)],
-        version = ctx.attr.version,
+        version = version,
     )
 
     return BUILD_for_stdlib(target_triple), sha256
 
-def load_rustc_dev_nightly(ctx, target_triple):
+def load_rustc_dev_nightly(ctx, target_triple, version, iso_date = None):
     """Loads the nightly rustc dev component
 
     Args:
         ctx: A repository_ctx.
         target_triple: The rust-style target triple of the tool
+        version (str): The version of the tool among \"nightly\", \"beta\", or an exact version.
+        iso_date (str): The iso_date to use with \"nightly\" or \"beta\" versions.
 
     Returns:
         Dict[str, str]: The sha256 value of the rustc-dev artifact.
     """
 
     subdir_name = "rustc-dev"
-    if ctx.attr.iso_date < "2020-12-24":
+    if iso_date and iso_date < "2020-12-24":
         subdir_name = "rustc-dev-{}".format(target_triple)
 
     sha256 = load_arbitrary_tool(
         ctx,
-        iso_date = ctx.attr.iso_date,
+        iso_date = iso_date,
         target_triple = target_triple,
         tool_name = "rustc-dev",
         tool_subdirectories = [subdir_name],
-        version = ctx.attr.version,
+        version = version,
     )
 
     return sha256
 
-def load_llvm_tools(ctx, target_triple):
+def load_llvm_tools(ctx, target_triple, version, iso_date = None):
     """Loads the llvm tools
 
     Args:
         ctx (repository_ctx): A repository_ctx.
         target_triple (struct): The rust-style target triple of the tool
+        version (str): The version of the tool among \"nightly\", \"beta\", or an exact version.
+        iso_date (str): The iso_date to use with \"nightly\" or \"beta\" versions.
 
     Returns:
         Tuple[str, Dict[str, str]]: The BUILD.bazel content and sha256 value of the llvm tools artifact.
     """
     sha256 = load_arbitrary_tool(
         ctx,
-        iso_date = ctx.attr.iso_date,
+        iso_date = iso_date,
         target_triple = target_triple,
         tool_name = "llvm-tools",
         tool_subdirectories = ["llvm-tools-preview"],
-        version = ctx.attr.version,
+        version = version,
     )
 
     return BUILD_for_llvm_tools(target_triple), sha256
@@ -910,6 +923,7 @@ toolchain(
     name = "{name}",
     exec_compatible_with = {exec_constraint_sets_serialized},
     target_compatible_with = {target_constraint_sets_serialized},
+    target_settings = {target_settings_serialized},
     toolchain = "{toolchain}",
     toolchain_type = "{toolchain_type}",
     visibility = ["//visibility:public"],
@@ -920,12 +934,14 @@ def BUILD_for_toolchain_hub(
         toolchain_names,
         toolchain_labels,
         toolchain_types,
+        target_settings,
         target_compatible_with,
         exec_compatible_with):
     return "\n".join([_build_file_for_toolchain_hub_template.format(
         name = toolchain_name,
         exec_constraint_sets_serialized = json.encode(exec_compatible_with[toolchain_name]),
         target_constraint_sets_serialized = json.encode(target_compatible_with[toolchain_name]),
+        target_settings_serialized = json.encode(target_settings[toolchain_name]) if toolchain_name in target_settings else "None",
         toolchain = toolchain_labels[toolchain_name],
         toolchain_type = toolchain_types[toolchain_name],
     ) for toolchain_name in toolchain_names])
@@ -939,6 +955,7 @@ def _toolchain_repository_hub_impl(repository_ctx):
         toolchain_names = repository_ctx.attr.toolchain_names,
         toolchain_labels = repository_ctx.attr.toolchain_labels,
         toolchain_types = repository_ctx.attr.toolchain_types,
+        target_settings = repository_ctx.attr.target_settings,
         target_compatible_with = repository_ctx.attr.target_compatible_with,
         exec_compatible_with = repository_ctx.attr.exec_compatible_with,
     ))
@@ -955,6 +972,10 @@ toolchain_repository_hub = repository_rule(
         ),
         "target_compatible_with": attr.string_list_dict(
             doc = "A list of constraints for the target platform for this toolchain, keyed by toolchain name.",
+            mandatory = True,
+        ),
+        "target_settings": attr.string_list_dict(
+            doc = "A list of config_settings that must be satisfied by the target configuration in order for this toolchain to be selected during toolchain resolution.",
             mandatory = True,
         ),
         "toolchain_labels": attr.string_dict(
