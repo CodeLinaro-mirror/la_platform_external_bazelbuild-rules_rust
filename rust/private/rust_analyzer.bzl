@@ -54,7 +54,9 @@ def write_rust_analyzer_spec_file(ctx, attrs, owner, base_info):
         env = base_info.env,
         deps = base_info.deps,
         crate_specs = depset(direct = [crate_spec], transitive = [base_info.crate_specs]),
-        proc_macro_dylib_path = base_info.proc_macro_dylib_path,
+        proc_macro_dylibs = depset(transitive = [base_info.proc_macro_dylibs]),
+        build_info_out_dirs = depset(transitive = [base_info.build_info_out_dirs]),
+        proc_macro_dylib = base_info.proc_macro_dylib,
         build_info = base_info.build_info,
     )
 
@@ -135,6 +137,10 @@ def _rust_analyzer_aspect_impl(target, ctx):
         if aliased_target.label in labels_to_rais:
             aliases[labels_to_rais[aliased_target.label]] = aliased_name
 
+    proc_macro_dylib = find_proc_macro_dylib(toolchain, target)
+    proc_macro_dylibs = [proc_macro_dylib] if proc_macro_dylib else None
+    build_info_out_dirs = [build_info.out_dir] if build_info != None and build_info.out_dir != None else None
+
     rust_analyzer_info = write_rust_analyzer_spec_file(ctx, ctx.rule.attr, ctx.label, RustAnalyzerInfo(
         aliases = aliases,
         crate = crate_info,
@@ -142,23 +148,29 @@ def _rust_analyzer_aspect_impl(target, ctx):
         env = crate_info.rustc_env,
         deps = dep_infos,
         crate_specs = depset(transitive = [dep.crate_specs for dep in dep_infos]),
-        proc_macro_dylib_path = find_proc_macro_dylib_path(toolchain, target),
+        proc_macro_dylibs = depset(direct = proc_macro_dylibs, transitive = [dep.proc_macro_dylibs for dep in dep_infos]),
+        build_info_out_dirs = depset(direct = build_info_out_dirs, transitive = [dep.build_info_out_dirs for dep in dep_infos]),
+        proc_macro_dylib = proc_macro_dylib,
         build_info = build_info,
     ))
 
     return [
         rust_analyzer_info,
-        OutputGroupInfo(rust_analyzer_crate_spec = rust_analyzer_info.crate_specs),
+        OutputGroupInfo(
+            rust_analyzer_crate_spec = rust_analyzer_info.crate_specs,
+            rust_analyzer_proc_macro_dylib = rust_analyzer_info.proc_macro_dylibs,
+            rust_analyzer_src = rust_analyzer_info.build_info_out_dirs,
+        ),
     ]
 
-def find_proc_macro_dylib_path(toolchain, target):
-    """Find the proc_macro_dylib_path of target. Returns None if target crate is not type proc-macro.
+def find_proc_macro_dylib(toolchain, target):
+    """Find the proc_macro_dylib of target. Returns None if target crate is not type proc-macro.
 
     Args:
         toolchain: The current rust toolchain.
         target: The current target.
     Returns:
-        (path): The path to the proc macro dylib, or None if this crate is not a proc-macro.
+        (File): The path to the proc macro dylib, or None if this crate is not a proc-macro.
     """
     if rust_common.crate_info in target:
         crate_info = target[rust_common.crate_info]
@@ -174,7 +186,7 @@ def find_proc_macro_dylib_path(toolchain, target):
     for action in target.actions:
         for output in action.outputs.to_list():
             if output.extension == dylib_ext[1:]:
-                return output.path
+                return output
 
     # Failed to find the dylib path inside a proc-macro crate.
     # TODO: Should this be an error?
@@ -187,6 +199,9 @@ rust_analyzer_aspect = aspect(
     doc = "Annotates rust rules with RustAnalyzerInfo later used to build a rust-project.json",
 )
 
+# Paths in the generated JSON file begin with one of these placeholders.
+# The `rust-analyzer` driver will replace them with absolute paths.
+_WORKSPACE_TEMPLATE = "__WORKSPACE__/"
 _EXEC_ROOT_TEMPLATE = "__EXEC_ROOT__/"
 _OUTPUT_BASE_TEMPLATE = "__OUTPUT_BASE__/"
 
@@ -217,21 +232,30 @@ def _create_single_crate(ctx, attrs, info):
     crate["edition"] = info.crate.edition
     crate["env"] = {}
     crate["crate_type"] = info.crate.type
+    crate["is_test"] = info.crate.is_test
 
     # Switch on external/ to determine if crates are in the workspace or remote.
     # TODO: Some folks may want to override this for vendored dependencies.
     is_external = info.crate.root.path.startswith("external/")
     is_generated = not info.crate.root.is_source
-    path_prefix = _EXEC_ROOT_TEMPLATE if is_external or is_generated else ""
+    path_prefix = _EXEC_ROOT_TEMPLATE if is_external or is_generated else _WORKSPACE_TEMPLATE
     crate["is_workspace_member"] = not is_external
     crate["root_module"] = path_prefix + info.crate.root.path
     crate["source"] = {"exclude_dirs": [], "include_dirs": []}
+
+    # We're only interested in the build info for local crates as these are the
+    # only ones for which we want build file watching and code lens runnables support.
+    if not is_external and not is_generated:
+        crate["build"] = {
+            "build_file": _WORKSPACE_TEMPLATE + ctx.build_file_path,
+            "label": ctx.label.package + ":" + ctx.label.name,
+        }
 
     if is_generated:
         srcs = getattr(ctx.rule.files, "srcs", [])
         src_map = {src.short_path: src for src in srcs if src.is_source}
         if info.crate.root.short_path in src_map:
-            crate["root_module"] = src_map[info.crate.root.short_path].path
+            crate["root_module"] = _WORKSPACE_TEMPLATE + src_map[info.crate.root.short_path].path
             crate["source"]["include_dirs"].append(path_prefix + info.crate.root.dirname)
 
     if info.build_info != None and info.build_info.out_dir != None:
@@ -263,9 +287,10 @@ def _create_single_crate(ctx, attrs, info):
     crate["deps"] = [_crate_id(dep.crate) for dep in info.deps if _crate_id(dep.crate) != crate_id]
     crate["aliases"] = {_crate_id(alias_target.crate): alias_name for alias_target, alias_name in info.aliases.items()}
     crate["cfg"] = info.cfgs
-    crate["target"] = find_toolchain(ctx).target_triple.str
-    if info.proc_macro_dylib_path != None:
-        crate["proc_macro_dylib_path"] = _EXEC_ROOT_TEMPLATE + info.proc_macro_dylib_path
+    toolchain = find_toolchain(ctx)
+    crate["target"] = (_EXEC_ROOT_TEMPLATE + toolchain.target_json.path) if toolchain.target_json else toolchain.target_flag_value
+    if info.proc_macro_dylib != None:
+        crate["proc_macro_dylib_path"] = _EXEC_ROOT_TEMPLATE + info.proc_macro_dylib.path
     return crate
 
 def _rust_analyzer_toolchain_impl(ctx):
@@ -315,6 +340,8 @@ def _rust_analyzer_detect_sysroot_impl(ctx):
     sysroot_src = rustc_srcs.label.package + "/library"
     if rustc_srcs.label.workspace_root:
         sysroot_src = _OUTPUT_BASE_TEMPLATE + rustc_srcs.label.workspace_root + "/" + sysroot_src
+    else:
+        sysroot_src = _WORKSPACE_TEMPLATE + sysroot_src
 
     rustc = rust_analyzer_toolchain.rustc
     sysroot_dir, _, bin_dir = rustc.dirname.rpartition("/")
@@ -323,10 +350,7 @@ def _rust_analyzer_detect_sysroot_impl(ctx):
             rustc.path,
         ))
 
-    sysroot = "{}/{}".format(
-        _OUTPUT_BASE_TEMPLATE,
-        sysroot_dir,
-    )
+    sysroot = _OUTPUT_BASE_TEMPLATE + sysroot_dir
 
     toolchain_info = {
         "sysroot": sysroot,

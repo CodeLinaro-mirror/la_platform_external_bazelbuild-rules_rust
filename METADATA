@@ -7,13 +7,13 @@ description: "Bazel rules for building Rust code."
 third_party {
   license_type: NOTICE
   last_upgrade_date {
-    year: 2024
-    month: 8
-    day: 15
+    year: 2025
+    month: 4
+    day: 25
   }
   identifier {
     type: "Git"
     value: "https://github.com/bazelbuild/rules_rust"
-    version: "0.49.3"
+    version: "0.60.0"
   }
 }
