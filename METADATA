@@ -14,6 +14,7 @@ third_party {
   identifier {
     type: "Git"
     value: "https://github.com/bazelbuild/rules_rust"
-    version: "0.60.0"
+    version: "a373426f39b6168bc839f34bd3680de5764b9c82"
+    closest_version: "0.60.0"
   }
 }
